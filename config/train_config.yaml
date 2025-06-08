@@ -1,0 +1,25 @@
+# General Training Parameters
+model_name: "google/paligemma-3b-mix-224"
+output_dir: "./output_finetune"
+seed: 42 # For reproducibility
+
+# Hugging Face Access Token (REQUIRED for gated models/datasets)
+hf_access_token: "<YOUR_AUTH_TOKEN>"
+
+# DataLoader Parameters
+batch_size: 4 # Reduced for initial testing, can be increased with more GPU memory
+num_workers: 2 # Number of CPU workers for data loading
+
+# Optimization Parameters
+num_epochs: 3
+learning_rate: 5e-5
+warmup_steps: 0.1 # 10% of total steps
+gradient_accumulation_steps: 1 # Number of steps to accumulate gradients before updating weights
+
+# Triplet Loss Parameters
+margin: 0.2
+distance_metric: "cosine" # "euclidean" or "cosine"
+
+# Model Specifics (Optional, but good for clarity)
+# hidden_size: 2048 # PaliGemma 3B hidden size
+# num_image_tokens: 256 # Typical number of visual tokens after projector
