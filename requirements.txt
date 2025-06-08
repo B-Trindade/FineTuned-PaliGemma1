@@ -1,0 +1,19 @@
+torch
+numba
+numpy
+pandas
+scipy
+torchvision
+scikit-learn
+# Image Processing
+matplotlib
+seaborn
+pillow
+# Progress Bars for training
+tqdm
+# HuggingFace:
+transformers[torch]
+datasets
+accelerate
+# Tensor reshaping
+einops
