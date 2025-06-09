@@ -17,3 +17,5 @@ datasets
 accelerate
 # Tensor reshaping
 einops
+# Unit testing
+pytest
