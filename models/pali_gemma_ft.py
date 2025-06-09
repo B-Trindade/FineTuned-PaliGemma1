@@ -107,7 +107,7 @@ class PaliGemmaFineTuneModel(nn.Module):
         # Let's override the forward pass to get the combined input embeddings and apply LayerNorm.
         # First, get visual features
         vision_outputs = self.model.vision_tower(pixel_values=pixel_values)
-        image_embeds = self.model.multi_modal_projector(vision_outputs.image_embeds) # This is fine-tunable
+        image_embeds = self.model.multi_modal_projector(vision_outputs.last_hidden_state) # This is fine-tunable
 
         # Then get text embeddings
         language_model_inputs_embeds = self.model.language_model.model.embed_tokens(input_ids) # This is fine-tunable
