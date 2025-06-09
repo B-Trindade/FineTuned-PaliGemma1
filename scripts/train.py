@@ -5,98 +5,137 @@ from accelerate import Accelerator
 from tqdm.auto import tqdm
 import os
 import random
+import yaml
 from PIL import Image
-import numpy as np
+from io import BytesIO # To open image bytes
 
 # Import our custom components
 from models.pali_gemma_ft import PaliGemmaFineTuneModel
 from utils.losses import TripletLoss
+from datasets import load_dataset # For loading Winoground
 
-# --- Dummy Winoground-like Dataset for Demonstration ---
-# In a real scenario, this would load the actual Winoground dataset
-# and create triplets (image_0, caption_0_good, caption_0_bad) or similar.
-class DummyWinogroundDataset(Dataset):
-    def __init__(self, processor, num_samples=100):
+# Set random seed for reproducibility
+def set_seed(seed: int):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+# --- Winoground Dataset ---
+class WinogroundDataset(Dataset):
+    def __init__(self, processor, hf_access_token: str, split: str = "train"):
         self.processor = processor
-        self.num_samples = num_samples
-        self.data = []
-
-        # Create dummy data: (image_path, positive_caption, negative_caption)
-        # For Winoground, positive_caption is the correct one for the image.
-        # Negative_caption is lexically similar but semantically incorrect for the image.
-        for i in range(num_samples):
-            # Dummy image path (we'll generate dummy images on the fly)
-            image_id = f"image_{i:03d}.png"
-            positive_caption = f"The {['red', 'blue', 'green'][i % 3]} dog is playing with the {['ball', 'frisbee'][i % 2]}."
-            negative_caption = f"The {['blue', 'green', 'red'][i % 3]} dog is playing with the {['frisbee', 'ball'][i % 2]}." # Lexically similar but wrong color/object
-            self.data.append((image_id, positive_caption, negative_caption))
+        # Load the Winoground dataset from Hugging Face
+        print(f"Loading Winoground dataset (split: {split}). This may take a while...")
+        self.dataset = load_dataset('facebook/winoground', split=split, use_auth_token=hf_access_token)
+        print(f"Winoground dataset loaded with {len(self.dataset)} examples.")
 
     def __len__(self):
-        return self.num_samples
+        return len(self.dataset)
 
     def __getitem__(self, idx):
-        # In a real dataset, you'd load the actual image from disk.
-        # Here, we generate a dummy image.
-        # A simple black square image
-        dummy_image = Image.fromarray(np.zeros((224, 224, 3), dtype=np.uint8))
+        item = self.dataset[idx]
 
-        _, positive_caption, negative_caption = self.data[idx]
+        # Winoground items have:
+        # 'image_0', 'image_1' (as dicts with 'bytes' key)
+        # 'caption_0', 'caption_1' (as strings)
+        # 'score_0', 'score_1', 'score_0_0', 'score_0_1', 'score_1_0', 'score_1_1'
 
-        # Process inputs. Note: We'll process images and captions separately
-        # to form anchor-positive-negative triplets for the model.
-        # The model's forward pass expects pixel_values, input_ids, attention_mask for each.
+        # Convert image bytes to PIL Image objects
+        image_0_bytes = item['image_0']['bytes']
+        image_1_bytes = item['image_1']['bytes']
+        image_0 = Image.open(BytesIO(image_0_bytes)).convert("RGB")
+        image_1 = Image.open(BytesIO(image_1_bytes)).convert("RGB")
 
-        # Anchor (image-positive_caption pair)
-        anchor_inputs = self.processor(images=dummy_image, text=positive_caption, return_tensors="pt", padding="max_length", truncation=True, max_length=128)
-        # Positive (image-positive_caption pair, which is effectively the same as anchor, but explicit for triplet)
-        positive_inputs = self.processor(images=dummy_image, text=positive_caption, return_tensors="pt", padding="max_length", truncation=True, max_length=128)
-        # Negative (image-negative_caption pair)
-        negative_inputs = self.processor(images=dummy_image, text=negative_caption, return_tensors="pt", padding="max_length", truncation=True, max_length=128)
+        caption_0 = item['caption_0']
+        caption_1 = item['caption_1']
 
+        # --- Triplet Formulation Strategy for Winoground ---
+        # The goal is to make the model understand which image goes with which caption,
+        # especially when captions are lexically similar but semantically divergent (foils).
+        # We can create two triplets per item:
+        # Triplet 1: Anchor=(Image 0, Caption 0), Positive=(Image 0, Caption 0), Negative=(Image 0, Caption 1)
+        # Triplet 2: Anchor=(Image 1, Caption 1), Positive=(Image 1, Caption 1), Negative=(Image 1, Caption 0)
+        # This forces the model to distinguish correct image-caption pairs from incorrect (foil) ones.
+
+        # Triplet 1
+        anchor1_inputs = self.processor(images=image_0, text=caption_0, return_tensors="pt", padding="max_length", truncation=True, max_length=128)
+        positive1_inputs = anchor1_inputs # The positive is conceptually the same as the anchor
+        negative1_inputs = self.processor(images=image_0, text=caption_1, return_tensors="pt", padding="max_length", truncation=True, max_length=128)
+
+        # Triplet 2 (Optional, but doubles the training data and reinforces distinctions)
+        anchor2_inputs = self.processor(images=image_1, text=caption_1, return_tensors="pt", padding="max_length", truncation=True, max_length=128)
+        positive2_inputs = anchor2_inputs
+        negative2_inputs = self.processor(images=image_1, text=caption_0, return_tensors="pt", padding="max_length", truncation=True, max_length=128)
+
+        # Return both triplets. DataLoader will concatenate them.
+        # Ensure squeezing batch dimension as DataLoader will add its own batch dim.
         return {
-            "anchor_pixel_values": anchor_inputs["pixel_values"].squeeze(0),
-            "anchor_input_ids": anchor_inputs["input_ids"].squeeze(0),
-            "anchor_attention_mask": anchor_inputs["attention_mask"].squeeze(0),
-            "positive_pixel_values": positive_inputs["pixel_values"].squeeze(0),
-            "positive_input_ids": positive_inputs["input_ids"].squeeze(0),
-            "positive_attention_mask": positive_inputs["attention_mask"].squeeze(0),
-            "negative_pixel_values": negative_inputs["pixel_values"].squeeze(0),
-            "negative_input_ids": negative_inputs["input_ids"].squeeze(0),
-            "negative_attention_mask": negative_inputs["attention_mask"].squeeze(0),
+            "anchor1_pixel_values": anchor1_inputs["pixel_values"].squeeze(0),
+            "anchor1_input_ids": anchor1_inputs["input_ids"].squeeze(0),
+            "anchor1_attention_mask": anchor1_inputs["attention_mask"].squeeze(0),
+            "positive1_pixel_values": positive1_inputs["pixel_values"].squeeze(0),
+            "positive1_input_ids": positive1_inputs["input_ids"].squeeze(0),
+            "positive1_attention_mask": positive1_inputs["attention_mask"].squeeze(0),
+            "negative1_pixel_values": negative1_inputs["pixel_values"].squeeze(0),
+            "negative1_input_ids": negative1_inputs["input_ids"].squeeze(0),
+            "negative1_attention_mask": negative1_inputs["attention_mask"].squeeze(0),
+
+            "anchor2_pixel_values": anchor2_inputs["pixel_values"].squeeze(0),
+            "anchor2_input_ids": anchor2_inputs["input_ids"].squeeze(0),
+            "anchor2_attention_mask": anchor2_inputs["attention_mask"].squeeze(0),
+            "positive2_pixel_values": positive2_inputs["pixel_values"].squeeze(0),
+            "positive2_input_ids": positive2_inputs["input_ids"].squeeze(0),
+            "positive2_attention_mask": positive2_inputs["attention_mask"].squeeze(0),
+            "negative2_pixel_values": negative2_inputs["pixel_values"].squeeze(0),
+            "negative2_input_ids": negative2_inputs["input_ids"].squeeze(0),
+            "negative2_attention_mask": negative2_inputs["attention_mask"].squeeze(0),
         }
 
 def main():
     # --- Configuration ---
-    # This would typically be loaded from config/train_config.yaml
-    model_name = "google/paligemma-3b-mix-224"
-    batch_size = 8
-    num_epochs = 3
-    learning_rate = 5e-5
-    warmup_steps = 0.1 # 10% of total steps
-    gradient_accumulation_steps = 1 # Simulate larger batch size if needed
-    output_dir = "./output_finetune"
-    margin = 0.2
-    distance_metric = "cosine"
+    with open('config/train_config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+
+    set_seed(config['seed'])
+
+    model_name = config['model_name']
+    batch_size = config['batch_size']
+    num_epochs = config['num_epochs']
+    learning_rate = config['learning_rate']
+    warmup_steps = config['warmup_steps']
+    gradient_accumulation_steps = config['gradient_accumulation_steps']
+    output_dir = config['output_dir']
+    margin = config['margin']
+    distance_metric = config['distance_metric']
+    hf_access_token = config['hf_access_token']
 
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
-    # Initialize accelerator for distributed training (handles device placement automatically)
-    accelerator = Accelerator(mixed_precision="bf16") # or "fp16" for mixed precision
+    # Initialize accelerator
+    # Removed mixed_precision for now due to user's CUDA driver warning.
+    # Accelerator will automatically use CPU if CUDA is not available or compatible.
+    accelerator = Accelerator()
 
-    # Load model and processor
+    # Load model and processor, passing the HF access token
     model = PaliGemmaFineTuneModel(model_name=model_name)
+    # Ensure the model's processor also uses the token if it's gated
+    model.processor.use_auth_token = hf_access_token
     processor = model.processor
 
     # Initialize Triplet Loss
     criterion = TripletLoss(margin=margin, distance_metric=distance_metric)
 
-    # Create dummy dataset and DataLoader
-    train_dataset = DummyWinogroundDataset(processor, num_samples=100) # Small for demo
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    # Create Winoground Dataset and DataLoader
+    # Using 'train' split for demonstration. In a real scenario, you'd use official splits.
+    train_dataset = WinogroundDataset(processor, hf_access_token=hf_access_token, split="train")
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=config['num_workers'])
 
     # Optimizer
-    # We only optimize parameters where requires_grad=True
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=learning_rate)
 
     # Learning rate scheduler
@@ -108,7 +147,7 @@ def main():
         num_training_steps=num_training_steps
     )
 
-    # Prepare everything for acceleration (device placement, distributed training)
+    # Prepare everything for acceleration
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
@@ -121,26 +160,44 @@ def main():
         progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
 
         for step, batch in enumerate(progress_bar):
-            # Get embeddings for anchor, positive, and negative
-            # Each input dict needs to be passed to model's forward separately
-            anchor_embeddings = model(
-                pixel_values=batch["anchor_pixel_values"],
-                input_ids=batch["anchor_input_ids"],
-                attention_mask=batch["anchor_attention_mask"]
+            # Calculate loss for Triplet 1
+            anchor1_embeddings = model(
+                pixel_values=batch["anchor1_pixel_values"],
+                input_ids=batch["anchor1_input_ids"],
+                attention_mask=batch["anchor1_attention_mask"]
             )
-            positive_embeddings = model(
-                pixel_values=batch["positive_pixel_values"],
-                input_ids=batch["positive_input_ids"],
-                attention_mask=batch["positive_attention_mask"]
+            positive1_embeddings = model(
+                pixel_values=batch["positive1_pixel_values"],
+                input_ids=batch["positive1_input_ids"],
+                attention_mask=batch["positive1_attention_mask"]
             )
-            negative_embeddings = model(
-                pixel_values=batch["negative_pixel_values"],
-                input_ids=batch["negative_input_ids"],
-                attention_mask=batch["negative_attention_mask"]
+            negative1_embeddings = model(
+                pixel_values=batch["negative1_pixel_values"],
+                input_ids=batch["negative1_input_ids"],
+                attention_mask=batch["negative1_attention_mask"]
             )
+            loss1 = criterion(anchor1_embeddings, positive1_embeddings, negative1_embeddings)
 
-            # Calculate Triplet Loss
-            loss = criterion(anchor_embeddings, positive_embeddings, negative_embeddings)
+            # Calculate loss for Triplet 2
+            anchor2_embeddings = model(
+                pixel_values=batch["anchor2_pixel_values"],
+                input_ids=batch["anchor2_input_ids"],
+                attention_mask=batch["anchor2_attention_mask"]
+            )
+            positive2_embeddings = model(
+                pixel_values=batch["positive2_pixel_values"],
+                input_ids=batch["positive2_input_ids"],
+                attention_mask=batch["positive2_attention_mask"]
+            )
+            negative2_embeddings = model(
+                pixel_values=batch["negative2_pixel_values"],
+                input_ids=batch["negative2_input_ids"],
+                attention_mask=batch["negative2_attention_mask"]
+            )
+            loss2 = criterion(anchor2_embeddings, positive2_embeddings, negative2_embeddings)
+
+            # Combine losses (e.g., average)
+            loss = (loss1 + loss2) / 2.0
             loss = loss / gradient_accumulation_steps # Scale loss for gradient accumulation
 
             accelerator.backward(loss)
@@ -167,4 +224,5 @@ if __name__ == "__main__":
     # To run this script, execute:
     # accelerate launch scripts/train.py
     # or python scripts/train.py if not using accelerate for single GPU/CPU
+    # Make sure to create the config/train_config.yaml file first!
     main()
