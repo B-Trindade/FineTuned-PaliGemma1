@@ -4,11 +4,12 @@ output_dir: "./output_finetune"
 seed: 42 # For reproducibility
 
 # Hugging Face Access Token (REQUIRED for gated models/datasets)
-hf_access_token: "<YOUR_AUTH_TOKEN>"
+hf_access_token: ""
 
 # DataLoader Parameters
 batch_size: 4 # Reduced for initial testing, can be increased with more GPU memory
 num_workers: 2 # Number of CPU workers for data loading
+max_seq_length: 128 # Max sequence length for tokenization
 
 # Optimization Parameters
 num_epochs: 3
@@ -16,10 +17,13 @@ learning_rate: 5e-5
 warmup_steps: 0.1 # 10% of total steps
 gradient_accumulation_steps: 1 # Number of steps to accumulate gradients before updating weights
 
-# Triplet Loss Parameters
-margin: 0.2
-distance_metric: "cosine" # "euclidean" or "cosine"
+# PEFT (QLoRA) Parameters
+use_qlora: True
+lora_r: 8 # LoRA attention dimension
+lora_alpha: 16 # Alpha parameter for LoRA scaling
+lora_dropout: 0.05 # Dropout probability for LoRA layers
+# Target modules for LoRA. Common choices for Gemma are 'q_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj'
+lora_target_modules: ["q_proj", "o_proj", "k_proj", "v_proj", "gate_proj", "up_proj", "down_proj"]
 
-# Model Specifics (Optional, but good for clarity)
-# hidden_size: 2048 # PaliGemma 3B hidden size
-# num_image_tokens: 256 # Typical number of visual tokens after projector
+# Evaluation Parameters
+eval_steps: 0.5 # Evaluate every X% of total training steps (e.g., 0.5 for every half epoch)
