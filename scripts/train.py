@@ -30,7 +30,8 @@ class WinogroundDataset(Dataset):
         self.processor = processor
         # Load the Winoground dataset from Hugging Face
         print(f"Loading Winoground dataset (split: {split}). This may take a while...")
-        self.dataset = load_dataset('facebook/winoground', split=split, use_auth_token=hf_access_token)
+        # self.dataset = load_dataset('facebook/winoground', split=split, use_auth_token=hf_access_token)
+        self.dataset = load_dataset('facebook/winoground', split=split)
         print(f"Winoground dataset loaded with {len(self.dataset)} examples.")
 
     def __len__(self):
