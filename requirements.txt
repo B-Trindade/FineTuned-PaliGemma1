@@ -15,6 +15,9 @@ tqdm
 transformers[torch]
 datasets
 accelerate
+# QLoRA
+bitsandbytes
+peft
 # Tensor reshaping
 einops
 # Unit testing
