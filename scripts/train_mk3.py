@@ -90,10 +90,11 @@ def main():
         warmup_ratio=0.1, # Using warmup_ratio is often more robust than fixed steps
         logging_steps=10,
         save_strategy="epoch",
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         bf16=True, # Use bfloat16 for performance on compatible hardware
         report_to="tensorboard",
         load_best_model_at_end=True,
+        remove_unused_columns=False, #* FIXED: Trainer must not delete columns before VQADataCollector processes it
     )
     
     # Initialize the Trainer
