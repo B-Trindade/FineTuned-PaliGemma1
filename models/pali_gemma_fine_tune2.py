@@ -218,7 +218,7 @@ class PaliGemmaFineTuneModel(nn.Module):
 # Example Usage: (Remains the same as before, but now expects PEFT setup)
 if __name__ == '__main__':
     # For testing, ensure you pass your actual token here if you are not using train.py directly
-    TOKEN = ""
+    TOKEN = "<mytoken>"
 
     # Dummy PEFT config for testing this module independently
     dummy_lora_target_modules = ["q_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
