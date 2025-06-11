@@ -79,7 +79,7 @@ class PaliGemmaFineTune(nn.Module):
             f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.4f}"
         )
 
-    def forward(self, pixel_values, input_ids, attention_mask, labels=None):
+    def forward(self, pixel_values, input_ids, attention_mask, labels=None, **kwargs):
         """
         Custom forward pass that injects the new LayerNorm block.
         This logic is necessary to modify the inputs to the language model.
@@ -101,7 +101,16 @@ class PaliGemmaFineTune(nn.Module):
         image_attention_mask = torch.ones(image_embeds.shape[:-1], dtype=torch.long, device=image_embeds.device)
         combined_attention_mask = torch.cat((image_attention_mask, attention_mask), dim=1)
 
-        # 6. Pass the modified embeddings through the language model
+        # 6. Align the labels tensor with the combined embeddings
+        if labels is not None:
+            # Create a tensor of -100s with the same shape as the image embeddings
+            image_labels_ignore = torch.full(image_embeds.shape[:-1], -100, dtype=torch.long, device=labels.device)
+            # Concatenate the ignore tensor with the actual text labels
+            combined_labels = torch.cat((image_labels_ignore, labels), dim=1)
+        else:
+            combined_labels = None
+
+        # 7. Pass the modified embeddings through the language model
         # The language model will compute the loss if labels are provided.
         outputs = self.model.language_model(
             inputs_embeds=inputs_embeds,
