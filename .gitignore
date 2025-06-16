@@ -6,7 +6,7 @@
 notebooks/
 
 # Logs and Outputs
-output_finetune/
+output_*/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
