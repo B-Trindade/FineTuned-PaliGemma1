@@ -10,7 +10,7 @@ from PIL import Image
 from io import BytesIO # To open image bytes
 
 # Import our custom components
-from models.pali_gemma_ft import PaliGemmaFineTuneModel
+from models.deprecated.pali_gemma_ft import PaliGemmaFineTuneModel
 from utils.losses import TripletLoss
 from datasets import load_dataset # For loading Winoground
 
